@@ -24,6 +24,8 @@ csv_files = [
     "https://raw.githubusercontent.com/captDzuL/graphql-compose-examples/master/examples/northwind/data/csv/products.csv"
 ]
 
+logging.basicConfig(level=logging.DEBUG)
+
 def drop_existing_tables():
     postgres_hook = PostgresHook(postgres_conn_id='airflow_db_conn')
     connection = postgres_hook.get_conn()
@@ -43,7 +45,6 @@ def download_and_clean_csv(url):
     response.raise_for_status()
 
     df = pd.read_csv(io.StringIO(response.text))
-    df.dropna(inplace=True)
     df.columns = df.columns.str.lower()
     df = df.applymap(lambda x: x.strip() if isinstance(x, str) else x)
 
@@ -77,7 +78,7 @@ def create_table_and_insert_data(df, table_name):
 
     for _, row in df.iterrows():
         values = ', '.join([
-            f"'{str(val).replace("'", "''")}'" if isinstance(val, str) or isinstance(val, pd.Timestamp) else str(val)
+            'NULL' if pd.isna(val) else f"'{str(val).replace("'", "''")}'" if isinstance(val, str) or isinstance(val, pd.Timestamp) else str(val)
             for val in row
         ])
         insert_sql = f"INSERT INTO {table_name} VALUES ({values});"
@@ -182,9 +183,11 @@ def extract_data_from_postgresql(query):
 def load_data_to_snowflake(df, table_name, schema):
     # Connect to Snowflake
     conn = snowflake.connector.connect(
-        user='your_snowflake_user',
-        password='your_snowflake_password',
-        account='your_snowflake_account'
+        user='dzulfdz',
+        password='Tarun@STPI20',
+        account='ir03211.ap-southeast-3.aws',
+        database='PROJECT3_AIRFLOW',
+        role='ACCOUNTADMIN'
     )
     cursor = conn.cursor()
     
@@ -224,11 +227,11 @@ def pd_dtype_to_snowflake_dtype(dtype):
 def load_data_mart_to_snowflake():
     supplier_gross_revenue_query = "SELECT * FROM supplier_gross_revenue;"
     supplier_gross_revenue_df = extract_data_from_postgresql(supplier_gross_revenue_query)
-    load_data_to_snowflake(supplier_gross_revenue_df, "supplier_gross_revenue", "public")
+    load_data_to_snowflake(supplier_gross_revenue_df, "supplier_gross_revenue", "project")
 
     category_top_sales_query = "SELECT * FROM category_top_sales;"
     category_top_sales_df = extract_data_from_postgresql(category_top_sales_query)
-    load_data_to_snowflake(category_top_sales_df, "category_top_sales", "public")
+    load_data_to_snowflake(category_top_sales_df, "category_top_sales", "project")
 
 
 default_args = {
