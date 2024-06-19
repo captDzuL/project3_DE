@@ -35,6 +35,13 @@ def drop_existing_tables():
         table_name = url.split('/')[-1].replace('.csv', '')
         drop_table_sql = f"DROP TABLE IF EXISTS {table_name} CASCADE;"
         cursor.execute(drop_table_sql)
+    
+    drop_table_sql = f"DROP TABLE IF EXISTS supplier_gross_revenue CASCADE;"
+    cursor.execute(drop_table_sql)
+    drop_table_sql = f"DROP TABLE IF EXISTS category_top_sales CASCADE;"
+    cursor.execute(drop_table_sql)
+    drop_table_sql = f"DROP TABLE IF EXISTS top_emp_rev CASCADE;"
+    cursor.execute(drop_table_sql)
 
     connection.commit()
     cursor.close()
@@ -168,6 +175,49 @@ def create_top_sales_data_mart():
     cursor.close()
     connection.close()
 
+def create_top_emp_rev_data_mart():
+    postgres_hook = PostgresHook(postgres_conn_id='airflow_db_conn')
+    connection = postgres_hook.get_conn()
+    cursor = connection.cursor()
+
+    create_data_mart_sql = """
+    CREATE TABLE IF NOT EXISTS top_emp_rev AS
+    WITH employee_revenue AS (
+    SELECT
+        e.FIRSTNAME || ' ' || e.LASTNAME AS employee_name,
+        TO_CHAR(DATE_TRUNC('month', o.ORDERDATE), 'YYYY-MM') AS month_order,
+        SUM((od.UNITPRICE - (od.UNITPRICE * od.DISCOUNT)) * od.QUANTITY) AS gross_revenue
+    FROM
+        order_details od
+        JOIN orders o ON od.ORDERID = o.ORDERID
+        JOIN employees e ON o.EMPLOYEEID = e.EMPLOYEEID
+    GROUP BY
+        employee_name, month_order
+    ),
+    ranked_employees AS (
+    SELECT
+        employee_name,
+        month_order,
+        gross_revenue,
+        ROW_NUMBER() OVER (PARTITION BY month_order ORDER BY gross_revenue DESC) AS rank
+    FROM
+        employee_revenue
+    )
+    SELECT
+    employee_name,
+    month_order,
+    gross_revenue
+    FROM
+    ranked_employees
+    WHERE
+    rank = 1
+        """
+    cursor.execute(create_data_mart_sql)
+    connection.commit()
+
+    cursor.close()
+    connection.close()
+
 def extract_data_from_postgresql(query):
     conn = psycopg2.connect(
         dbname="airflow",
@@ -233,6 +283,10 @@ def load_data_mart_to_snowflake():
     category_top_sales_df = extract_data_from_postgresql(category_top_sales_query)
     load_data_to_snowflake(category_top_sales_df, "category_top_sales", "project")
 
+    top_emp_rev_query = "SELECT * FROM public.top_emp_rev;"
+    top_emp_rev_df = extract_data_from_postgresql(top_emp_rev_query)
+    load_data_to_snowflake(top_emp_rev_df, "top_emp_rev", "project")
+
 
 default_args = {
     'owner': 'dzulfdz',
@@ -283,10 +337,17 @@ create_top_sales_task = PythonOperator(
     dag=dag
 )
 
+# Task to create the top employee revenue
+create_top_emp_rev_task = PythonOperator(
+    task_id='create_top_emp_rev_data_mart',
+    python_callable=create_top_emp_rev_data_mart,
+    dag=dag
+)
+
 load_data_mart_task = PythonOperator(
     task_id='load_data_mart_to_snowflake',
     python_callable=load_data_mart_to_snowflake,
     dag=dag
 )
 
-previous_task >> create_gross_revenue_task >> create_top_sales_task >> load_data_mart_task
+previous_task >> create_gross_revenue_task >> create_top_sales_task >> create_top_emp_rev_task >> load_data_mart_task
